@@ -1,0 +1,211 @@
+{
+  "Comment": "ETL Pipeline Orchestrated with AWS Step Functions",
+  "StartAt": "Run Glue Job - Products",
+  "States": {
+    "Run Glue Job - Products": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "ProductsJob"
+      },
+      "Next": "Run Glue Job - Orders",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "Run Glue Job - Orders": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "OrdersJob"
+      },
+      "Next": "Run Glue Job - Order Items",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "Run Glue Job - Order Items": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "OrderItemsJob"
+      },
+      "Next": "CheckGlueJobStatus",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "CheckGlueJobStatus": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.JobRunState",
+          "StringEquals": "SUCCEEDED",
+          "Next": "RunGlueCrawler"
+        }
+      ]
+    },
+    "RunGlueCrawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Parameters": {
+        "Name": "project-6-crawler"
+      },
+      "Next": "WaitForCrawlerToFinish",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "WaitForCrawlerToFinish": {
+      "Type": "Wait",
+      "Seconds": 80,
+      "Next": "CheckCrawlerStatus"
+    },
+    "CheckCrawlerStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+      "Parameters": {
+        "Name": "project-6-crawler"
+      },
+      "Next": "Parallel Athena Queries",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "CrawlerRunningException"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "Parallel Athena Queries": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Run Athena Query 1",
+          "States": {
+            "Run Athena Query 1": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT * from orders limit 5;",
+                "QueryExecutionContext": {
+                  "Database": "ecommerce_db_ii"
+                },
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lakehouse-e-commerce/athena-query-results/"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Run Athena Query 2",
+          "States": {
+            "Run Athena Query 2": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT * from order_items limit 5;",
+                "QueryExecutionContext": {
+                  "Database": "ecommerce_db_ii"
+                },
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lakehouse-e-commerce/athena-query-results/"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Run Athena Query 3",
+          "States": {
+            "Run Athena Query 3": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+              "Parameters": {
+                "QueryString": "SELECT * from products limit 5;",
+                "QueryExecutionContext": {
+                  "Database": "ecommerce_db_ii"
+                },
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://lakehouse-e-commerce/athena-query-results/"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "Archive Raw Files",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "Archive Raw Files": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "ArchiveFiles",
+        "Payload": {
+          "sourceBucket": "lakehouse-e-commerce",
+          "sourcePrefix": "raw-data/",
+          "archivePrefix": "archive/"
+        }
+      },
+      "Next": "Success",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Handle Failure"
+        }
+      ]
+    },
+    "Handle Failure": {
+      "Type": "Fail",
+      "Error": "WorkflowFailed",
+      "Cause": "Step Function execution failed due to an error."
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}
