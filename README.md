@@ -56,8 +56,7 @@ This project implements a **production-grade Lakehouse architecture** on **AWS**
 ---
 
 ## Architecture Diagram
-
-
+![Lakehouse Architecture](images/Project-6.png)
 
 ---
 
